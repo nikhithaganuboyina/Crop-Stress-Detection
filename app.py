@@ -46,6 +46,23 @@ def extract_leaf_name(disease_name: str) -> str:
         return parts[0].replace("_", " ")
     return "Unknown"
 
+# Plant names to REMOVE from display – never reveal leaf/plant type
+_PLANT_WORDS = [
+    "cedar apple", "apple", "corn", "tomato", "grape", "potato", "pepper", "peach",
+    "strawberry", "blueberry", "cherry", "lemon", "orange", "squash", "cucumber",
+    "pear", "plum", "raspberry", "blackberry", "citrus", "bean", "soybean", "cotton",
+    "sugarcane", "bell",
+]
+
+def disease_display_no_plant(text: str) -> str:
+    """Show disease only – strip plant/leaf name hints (e.g. apple, corn)."""
+    s = text.split("__")[-1].replace("_", " ").strip()
+    lower = s.lower()
+    for word in sorted(_PLANT_WORDS, key=len, reverse=True):  # longer first
+        lower = lower.replace(word, " ")
+    out = " ".join(lower.split()).strip()
+    return out.title() if out else "Disease"
+
 def get_stress_level(disease_name: str, confidence: float):
     disease_lower = disease_name.lower()
     disease_part = disease_lower.split("__")[-1] if "__" in disease_lower else disease_lower
@@ -160,33 +177,45 @@ def log_analysis_to_history(
 # ==============================
 st.title("🌿 Crop Leaf Stress & Disease Detection")
 st.write(
-    "Upload a clear photo of a single leaf. The model will estimate the "
-    "**disease** and **stress level**, and you can explore how stress changes "
-    "across crop stages."
+    "📸 **Step 1:** Take a photo of a leaf. **Step 2:** Click upload and choose the photo. **Step 3:** Press Analyze. "
+    "The system shows stress level and possible diseases (no plant name revealed)."
 )
 
-st.sidebar.header("How to use")
-st.sidebar.markdown(
-    "- Upload a single leaf image (JPG/PNG)\n"
-    "- Tap the leaf preview to highlight stress level\n"
-    "- Swipe/scroll through stages to see growth vs stress trends\n"
-    "- Use the sliders to explore how moisture / temperature affect stress"
-)
+# Farmer-friendly sidebar – steps always visible
+st.sidebar.header("📖 How to Use (ఉపయోగించడం ఎలా)")
+with st.sidebar.expander("📋 Steps (చివరి వరకు చదవండి)", expanded=True):
+    st.markdown("**1.** Upload – Click 'Browse files' or drag leaf photo (JPG/PNG)")
+    st.markdown("**2.** Analyze – Click green 'Analyze leaf' button")
+    st.markdown("**3.** Stress – 🟢 Healthy / 🟠 Moderate / 🔴 Severe")
+    st.markdown("**4.** Stress areas – Color on leaf shows affected region")
+    st.markdown("**5.** Disease list – Names shown (plant name never revealed)")
+    st.markdown("**6.** Tip – Clear photo of ONE leaf works best")
+st.sidebar.markdown("---")
+st.sidebar.markdown("**పచ్చని=Healthy | పసుపు=Moderate | ఎరుపు=Severe**")
+st.sidebar.markdown("💡 *Result shows stress type + disease only*")
 
-# Global CSS for subtle farm background, water / soil animations, leaf emojis and ripple
+# Global CSS for farm background, water / soil animations, leaf emojis and ripple
 st.markdown(
     """
     <style>
-    /* Main app background – brighter sky and fields */
+    /* Main app background – layered farm sky, fields, and soil */
     .stApp {
         background:
-          /* sky */
-          radial-gradient(circle at 15% 5%, rgba(255, 239, 170, 0.9) 0, transparent 35%),
-          linear-gradient(180deg, rgba(178, 216, 245, 1) 0, rgba(216, 237, 252, 0.96) 32%, rgba(234, 246, 236, 0.98) 55%, #ffffff 78%),
-          /* distant hills */
-          radial-gradient(circle at 5% 86%, rgba(129, 183, 117, 0.85) 0, transparent 55%),
-          radial-gradient(circle at 55% 92%, rgba(98, 160, 107, 0.85) 0, transparent 58%),
-          radial-gradient(circle at 105% 88%, rgba(156, 196, 130, 0.8) 0, transparent 48%);
+          /* warm sunrise sky */
+          radial-gradient(circle at 10% 0%, rgba(255, 241, 200, 1) 0, rgba(255, 241, 200, 0) 35%),
+          linear-gradient(180deg, #bfe3ff 0, #e1f3ff 30%, #e9f9ef 55%, #f3ffe8 70%, #f4f0e4 82%, #e3c79d 100%),
+          /* soft distant green hills */
+          radial-gradient(circle at 0% 88%, rgba(126, 173, 106, 0.95) 0, transparent 55%),
+          radial-gradient(circle at 55% 92%, rgba(104, 155, 102, 0.95) 0, transparent 58%),
+          radial-gradient(circle at 110% 86%, rgba(158, 197, 130, 0.9) 0, transparent 52%),
+          /* horizontal crop rows */
+          repeating-linear-gradient(
+              180deg,
+              rgba(143, 188, 143, 0.65) 0,
+              rgba(143, 188, 143, 0.65) 4px,
+              rgba(206, 231, 199, 0.6) 4px,
+              rgba(206, 231, 199, 0.6) 12px
+          );
         background-attachment: fixed;
     }
     /* Farm‑related emoji accents floating in background */
@@ -195,22 +224,24 @@ st.markdown(
         inset: 0;
         pointer-events: none;
         z-index: 0;
-        opacity: 0.35;
+        opacity: 0.42;
     }
     .farm-emoji-layer span {
         position: absolute;
-        font-size: 1.8rem;
+        font-size: 2.1rem;
         filter: drop-shadow(0 2px 3px rgba(0,0,0,0.15));
         animation: farm-float 10s ease-in-out infinite alternate;
     }
-    .farm-emoji-layer span:nth-child(1) { top: 10%; left: 6%;  animation-delay: 0s; }
-    .farm-emoji-layer span:nth-child(2) { top: 16%; right: 6%; animation-delay: 1.0s; }
-    .farm-emoji-layer span:nth-child(3) { bottom: 20%; left: 10%; animation-delay: 1.8s; }
-    .farm-emoji-layer span:nth-child(4) { bottom: 18%; right: 12%; animation-delay: 2.5s; }
-    .farm-emoji-layer span:nth-child(5) { top: 26%; left: 36%; animation-delay: 3.1s; }
-    .farm-emoji-layer span:nth-child(6) { top: 32%; right: 32%; animation-delay: 3.7s; }
-    .farm-emoji-layer span:nth-child(7) { bottom: 26%; left: 40%; animation-delay: 4.3s; }
-    .farm-emoji-layer span:nth-child(8) { bottom: 30%; right: 40%; animation-delay: 4.9s; }
+    .farm-emoji-layer span:nth-child(1) { top: 9%;  left: 6%;  animation-delay: 0s;   }
+    .farm-emoji-layer span:nth-child(2) { top: 15%; right: 7%; animation-delay: 1.0s; }
+    .farm-emoji-layer span:nth-child(3) { bottom: 22%; left: 8%;  animation-delay: 1.8s; }
+    .farm-emoji-layer span:nth-child(4) { bottom: 18%; right: 10%; animation-delay: 2.5s; }
+    .farm-emoji-layer span:nth-child(5) { top: 24%; left: 32%; animation-delay: 3.1s; }
+    .farm-emoji-layer span:nth-child(6) { top: 30%; right: 30%; animation-delay: 3.7s; }
+    .farm-emoji-layer span:nth-child(7) { bottom: 24%; left: 42%; animation-delay: 4.3s; }
+    .farm-emoji-layer span:nth-child(8) { bottom: 30%; right: 42%; animation-delay: 4.9s; }
+    .farm-emoji-layer span:nth-child(9) { top: 40%; left: 18%;  animation-delay: 2.2s; }
+    .farm-emoji-layer span:nth-child(10){ top: 42%; right: 18%; animation-delay: 3.4s; }
 
     @keyframes farm-float {
         from { transform: translateY(0px); }
@@ -219,7 +250,10 @@ st.markdown(
     .leaf-upload-card {
         padding: 1.2rem;
         border-radius: 1.2rem;
-        background: radial-gradient(circle at top, #e3f4e8 0, #f7fff9 40%, #ffffff 100%);
+        background:
+          radial-gradient(circle at 0% 0%, rgba(255,255,255,0.8) 0, rgba(255,255,255,0) 40%),
+          radial-gradient(circle at 100% 0%, rgba(255,255,255,0.7) 0, rgba(255,255,255,0) 45%),
+          radial-gradient(circle at 20% 120%, #d9f3df 0, #f7fff9 45%, #ffffff 100%);
         position: relative;
         overflow: hidden;
         box-shadow: 0 8px 20px rgba(0, 0, 0, 0.05);
@@ -334,6 +368,8 @@ st.markdown(
       <span>🌽</span>
       <span>🍀</span>
       <span>🏡</span>
+      <span>🐄</span>
+      <span>🐓</span>
     </div>
     """,
     unsafe_allow_html=True,
@@ -388,61 +424,62 @@ with main_col:
                 st.button(emoji, key=f"rain_{emoji}")
 
         uploaded_file = st.file_uploader(
-            "Drop a leaf image here (or browse)",
+            "📤 Click here or drag leaf photo (JPG/PNG) – ఇక్కడ క్లిక్ చేయండి లేదా ఆకు ఫోటో ఉంచండి",
             type=["jpg", "jpeg", "png"],
         )
 
         if uploaded_file is not None:
             pil_image = Image.open(uploaded_file).convert("RGB")
 
-            if st.button("Analyze leaf", type="primary"):
+            if st.button("🔍 Analyze leaf (విశ్లేషించండి)", type="primary"):
                 with st.spinner("Analyzing leaf image..."):
                     result = predict_leaf_disease_from_pil(pil_image)
                     st.session_state.last_result = result
+                    st.session_state.last_image = pil_image.copy()
                     st.session_state.ripple = True
 
     # Show analysis if we have a previous result (kept on same page)
     if st.session_state.last_result is not None:
         result = st.session_state.last_result
+        pil_image = st.session_state.get("last_image")
         disease_clean = result["disease"].split("__")[-1].replace("_", " ")
 
-        # Determine stress class for ripple color
+        st.markdown("#### 2. Stress areas (affected region highlighted)")
+        # Stress-area overlay: blend a colored tint onto the leaf image
+        if pil_image is None:
+            pil_image = Image.new("RGB", (224, 224), (200, 220, 200))
+        overlay_pil = pil_image.copy()
         level_text = result["stress_level"].lower()
         if "no stress" in level_text or "healthy" in level_text:
-            stress_class = "leaf-healthy"
+            tint = (0, 180, 0)   # green
         elif "moderate" in level_text:
-            stress_class = "leaf-moderate"
+            tint = (255, 200, 0)  # yellow/orange
         else:
-            stress_class = "leaf-severe"
+            tint = (220, 80, 80)  # red
+        overlay_layer = Image.new("RGB", overlay_pil.size, tint)
+        overlay_pil = Image.blend(overlay_pil, overlay_layer, alpha=0.25)
+        st.image(overlay_pil, caption="🔍 Stress areas highlighted on leaf (దెబ్బతిన్న ప్రదేశాలు)", use_column_width=True)
 
-        ripple_class = "ripple-active" if st.session_state.ripple else ""
-
-        st.markdown("#### 2. Tap the leaf to feel the stress level")
-        st.markdown(
-            f"""
-            <div class="leaf-preview {stress_class} {ripple_class}" onclick="this.classList.add('ripple-active'); setTimeout(()=>this.classList.remove('ripple-active'), 400);">
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        if uploaded_file is not None:
-            st.image(pil_image, caption="Tap the leaf to highlight stress", use_column_width=True)
-
-        st.markdown("#### 3. Leaf health result")
+        st.markdown("#### 3. Leaf health & possible diseases")
         col_a, col_b = st.columns(2)
         with col_a:
-            st.markdown(f"**Leaf health:** {result['stress_level']}")
-            st.markdown(f"**Disease or status:** {disease_clean}")
+            st.markdown(f"**Stress type:** {result['stress_level']}")
         with col_b:
             st.markdown(f"**Model confidence:** {result['confidence'] * 100:.1f}%")
             st.progress(min(max(result["confidence"], 0.0), 1.0))
 
+        # Disease list – DISEASE NAME ONLY (never reveal plant/leaf name)
         probs = result["raw_probs"]
         top3_idx = np.argsort(probs)[-3:][::-1]
-        st.markdown("**Most likely problems**")
+        st.markdown("**Possible diseases (రోగాలు):**")
         for i in top3_idx:
-            label = class_names[i].split("__")[-1].replace("_", " ")
-            st.markdown(f"- {label}: {probs[i] * 100:.1f}%")
+            disease_only = disease_display_no_plant(class_names[i])
+            st.markdown(f"- {disease_only}: {probs[i] * 100:.1f}%")
+
+        with st.expander("❓ What does this mean? (ఫలితం అంటే ఏమిటి?)"):
+            st.markdown("**🟢 Healthy** – No action needed.")
+            st.markdown("**🟠 Moderate** – Start treatment in 2–3 days.")
+            st.markdown("**🔴 Severe** – Urgent! Apply treatment soon.")
 
         st.markdown("#### 4. Explore conditions")
         col_m, col_t = st.columns(2)
