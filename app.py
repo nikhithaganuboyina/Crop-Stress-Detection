@@ -176,10 +176,6 @@ def log_analysis_to_history(
 # STREAMLIT UI
 # ==============================
 st.title("🌿 Crop Leaf Stress & Disease Detection")
-st.write(
-    "📸 **Step 1:** Take a photo of a leaf. **Step 2:** Click upload and choose the photo. **Step 3:** Press Analyze. "
-    "The system shows stress level and possible diseases (no plant name revealed)."
-)
 
 # Farmer-friendly sidebar – steps always visible
 st.sidebar.header("📖 How to Use (ఉపయోగించడం ఎలా)")
