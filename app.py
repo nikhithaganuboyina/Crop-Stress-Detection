@@ -77,15 +77,152 @@ def infer_stress_stage(stress_text: str, confidence: float) -> str:
 
 
 def is_probably_leaf(pil_img: Image.Image) -> bool:
-    """Very simple check to reject clearly non-leaf images."""
+    """
+    Robust leaf verification — pure numpy, no cv2 dependency.
+    Checks: colour, G/B ratio, texture, brightness pattern.
+    """
+    import base64, io, json, urllib.request
+
     try:
         arr = np.array(pil_img.resize((224, 224))).astype("float32")
         if arr.ndim != 3 or arr.shape[2] < 3:
             return False
+
         r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
-        green_mask = (g > r * 1.05) & (g > b * 1.05)
-        green_frac = float(green_mask.mean())
-        return green_frac > 0.08  # need at least some green-ish pixels
+        gray = 0.299 * r + 0.587 * g + 0.114 * b
+        b_mean = float(b.mean())
+        g_mean = float(g.mean())
+        r_mean = float(r.mean())
+        mid_tone    = float(((gray >= 55) & (gray <= 210)).mean())
+        very_bright = float((gray > 220).mean())
+
+        # ── 1. INSTANT HARD REJECTS ──────────────────────────────────────
+        if float(arr.mean()) < 35:
+            return False  # near-black / empty or very dark object
+        if float(((b > r * 1.25) & (b > g * 1.1) & (b > 70)).mean()) > 0.40:
+            return False  # sky / water / blue dominant
+        if float(np.std(gray)) < 5.0:
+            return False  # completely flat image
+
+        # ── 2. WHITE BACKGROUND CHECK ────────────────────────────────────
+        white_mask = (r > 210) & (g > 210) & (b > 210)
+        white_frac = float(white_mask.mean())
+        if white_frac > 0.60:
+            non_white = ~white_mask
+            if non_white.sum() > 500:
+                gn = g[non_white]; rn = r[non_white]; bn = b[non_white]
+                subj_green = float(((gn > rn*1.02) & (gn > bn*1.15) & (gn > 40)).mean())
+                subj_warm  = float(((rn > 70) & (gn > 50) & (bn < 90) &
+                                    (gn > bn*1.95) & (gn > rn*0.72) &
+                                    ((gn - bn) > 45)).mean())
+                has_subject = (1 - white_frac) > 0.12 and (subj_green + subj_warm) > 0.12
+            else:
+                has_subject = False
+            if not has_subject:
+                return False
+
+        # ── 3. TEAL / CYAN REJECTION ─────────────────────────────────────
+        non_white2 = ~((r > 210) & (g > 210) & (b > 210))
+        if non_white2.sum() > 200:
+            b_s = float(b[non_white2].mean())
+            g_s = float(g[non_white2].mean())
+            r_s = float(r[non_white2].mean())
+        else:
+            b_s, g_s, r_s = b_mean, g_mean, r_mean
+        if b_s > 135 and g_s > r_s * 1.03:
+            return False  # teal/cyan — artificial colour
+
+        # ── 4. LEAF COLOUR CHECK ─────────────────────────────────────────
+        # Natural green: G dominant over both R and B
+        natural_green = float(((g > r * 1.02) & (g > b * 1.15) & (g > 40)).mean())
+
+        # Warm leaf tones (yellowing/diseased/brown):
+        # Critical: G/B > 1.9 — real leaves always have much lower B than G
+        # This rejects wood (G/B~1.7), soil (G/B~1.4), skin (G/B~1.3)
+        warm_leaf = float(((r > 70) & (g > 50) & (b < 90) &
+                           (r < 220) & (g > b * 1.95) & (g > r * 0.72) &
+                           ((g - b) > 45)).mean())
+
+        leaf_colour = natural_green + warm_leaf * 0.8
+        if leaf_colour < 0.08:
+            return False  # no leaf-like colour
+
+        # ── 5. SKIN / YELLOW FRUIT REJECTION ────────────────────────────
+        # Pre-compute leaf colour for use in skin check
+        ng_pre = float(((g > r * 1.02) & (g > b * 1.15) & (g > 40)).mean())
+        wl_pre = float(((r > 70) & (g > 50) & (b < 90) &
+                        (r < 220) & (g > b * 1.95) & (g > r * 0.72) &
+                        ((g - b) > 45)).mean())
+        pre_leaf_colour = ng_pre + wl_pre * 0.8
+
+        # Skin tones: only reject if no leaf colour present (e.g. leaf on skin bg is OK)
+        skin_like = float(((r > 150) & (r > g * 1.15) & (g > b * 1.15) & (b > 60)).mean())
+        if skin_like > 0.35 and pre_leaf_colour < 0.08:
+            return False  # skin with no leaf subject — not a leaf
+
+        # Very yellow objects (lemon, banana): high R+G, very low B
+        very_yellow = float(((r > 180) & (g > 150) & (b < 80)).mean())
+        if very_yellow > 0.50:
+            return False  # yellow fruit/object — not a leaf
+
+        # ── 6. BRIGHTNESS PATTERN ────────────────────────────────────────
+        if very_bright > 0.65 and mid_tone < 0.28:
+            return False  # uniformly very bright — digital art
+
+        # ── 6. LOCAL TEXTURE CHECK ───────────────────────────────────────
+        step = 28
+        block_stds = [float(np.std(gray[i:i+step, j:j+step]))
+                      for i in range(0, 224, step)
+                      for j in range(0, 224, step)]
+        textured_blocks = sum(1 for s in block_stds if s > 6) / len(block_stds)
+        avg_local_std   = float(np.mean(block_stds))
+        if textured_blocks < 0.30:
+            return False
+        if avg_local_std < 5.0:
+            return False
+
+        # ── 7. CHANNEL VARIANCE CHECK ────────────────────────────────────
+        channel_vars = sorted([float(np.std(r)), float(np.std(g)), float(np.std(b))])
+        if channel_vars[1] < 8.0:
+            return False  # channels too uniform
+
+        # ── 8. CLAUDE VISION API ─────────────────────────────────────────
+        try:
+            api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+            if not api_key:
+                raise ValueError("No key")
+            buf = io.BytesIO()
+            thumb = pil_img.copy()
+            thumb.thumbnail((512, 512))
+            thumb.save(buf, format="JPEG", quality=80)
+            b64 = base64.b64encode(buf.getvalue()).decode()
+            payload = json.dumps({
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 20,
+                "messages": [{"role": "user", "content": [
+                    {"type": "image", "source": {"type": "base64",
+                     "media_type": "image/jpeg", "data": b64}},
+                    {"type": "text", "text": (
+                        "Is this a real photograph of a plant leaf or crop foliage? "
+                        "Answer YES only for real plant leaf photos. "
+                        "Answer NO for wallpapers, digital art, people, animals, food, or objects. "
+                        "Reply with exactly one word: YES or NO."
+                    )}
+                ]}]
+            }).encode()
+            req = urllib.request.Request(
+                "https://api.anthropic.com/v1/messages", data=payload,
+                headers={"Content-Type": "application/json",
+                         "x-api-key": api_key, "anthropic-version": "2023-06-01"},
+                method="POST")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                answer = json.loads(resp.read())["content"][0]["text"].strip().upper()
+                return answer.startswith("YES")
+        except Exception:
+            pass
+
+        return True
+
     except Exception:
         return False
 
@@ -455,9 +592,19 @@ with main_col:
             pil_image = Image.open(uploaded_file).convert("RGB")
 
             if st.button("🔍 Analyze leaf (విశ్లేషించండి)", type="primary"):
-                with st.spinner("Analyzing leaf image..."):
+                with st.spinner("Verifying image and analyzing leaf..."):
                     if not is_probably_leaf(pil_image):
-                        st.error("This photo does not look like a leaf. దయచేసి ఒక్క ఆకు ఉన్న ఫోటో మాత్రమే upload చేయండి.")
+                        st.error(
+                            "⚠️ This does not appear to be a plant leaf image.\n\n"
+                            "దయచేసి పంట ఆకు యొక్క స్పష్టమైన ఫోటో మాత్రమే upload చేయండి."
+                        )
+                        st.info(
+                            "💡 **Tips for a good leaf photo:**\n"
+                            "- Hold the leaf flat and fill the frame\n"
+                            "- Use natural daylight (avoid flash)\n"
+                            "- Capture ONE leaf clearly\n"
+                            "- Accepted: green, yellowing, brown, or spotted leaves"
+                        )
                         st.session_state.last_result = None
                         st.session_state.last_image = None
                     else:
@@ -486,7 +633,7 @@ with main_col:
             tint = (220, 80, 80)  # red
         overlay_layer = Image.new("RGB", overlay_pil.size, tint)
         overlay_pil = Image.blend(overlay_pil, overlay_layer, alpha=0.25)
-        st.image(overlay_pil, caption="🔍 Stress areas highlighted on leaf (దెబ్బతిన్న ప్రదేశాలు)", use_column_width=True)
+        st.image(overlay_pil, caption="🔍 Stress areas highlighted on leaf (దెబ్బతిన్న ప్రదేశాలు)", use_container_width=True)
 
         st.markdown("#### 3. Leaf health & possible diseases")
         col_a, col_b = st.columns(2)
