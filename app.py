@@ -186,37 +186,50 @@ def is_probably_leaf(pil_img: Image.Image) -> bool:
         if channel_vars[1] < 8.0:
             return False  # channels too uniform
 
-        # ── 8. CLAUDE VISION API ─────────────────────────────────────────
+        # ── 8. VISION API CHECK (Google Gemini — FREE tier available) ────
+        # Get free API key at: https://aistudio.google.com/apikey
+        # No credit card needed! Add to Streamlit secrets as GEMINI_API_KEY
         try:
-            api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+            api_key = st.secrets.get("GEMINI_API_KEY", "")
             if not api_key:
                 raise ValueError("No key")
+
             buf = io.BytesIO()
             thumb = pil_img.copy()
             thumb.thumbnail((512, 512))
             thumb.save(buf, format="JPEG", quality=80)
             b64 = base64.b64encode(buf.getvalue()).decode()
+
             payload = json.dumps({
-                "model": "claude-sonnet-4-20250514",
-                "max_tokens": 20,
-                "messages": [{"role": "user", "content": [
-                    {"type": "image", "source": {"type": "base64",
-                     "media_type": "image/jpeg", "data": b64}},
-                    {"type": "text", "text": (
-                        "Is this a real photograph of a plant leaf or crop foliage? "
-                        "Answer YES only for real plant leaf photos. "
-                        "Answer NO for wallpapers, digital art, people, animals, food, or objects. "
-                        "Reply with exactly one word: YES or NO."
-                    )}
-                ]}]
+                "contents": [{
+                    "parts": [
+                        {
+                            "inline_data": {
+                                "mime_type": "image/jpeg",
+                                "data": b64
+                            }
+                        },
+                        {
+                            "text": (
+                                "Is this a real photograph of a plant leaf or crop foliage? "
+                                "Answer YES only for real plant leaf photos. "
+                                "Answer NO for wallpapers, digital art, people, animals, food, or objects. "
+                                "Reply with exactly one word: YES or NO."
+                            )
+                        }
+                    ]
+                }]
             }).encode()
+
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
             req = urllib.request.Request(
-                "https://api.anthropic.com/v1/messages", data=payload,
-                headers={"Content-Type": "application/json",
-                         "x-api-key": api_key, "anthropic-version": "2023-06-01"},
-                method="POST")
+                url, data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
             with urllib.request.urlopen(req, timeout=10) as resp:
-                answer = json.loads(resp.read())["content"][0]["text"].strip().upper()
+                result = json.loads(resp.read())
+                answer = result["candidates"][0]["content"]["parts"][0]["text"].strip().upper()
                 return answer.startswith("YES")
         except Exception:
             pass
@@ -609,9 +622,34 @@ with main_col:
                         st.session_state.last_image = None
                     else:
                         result = predict_leaf_disease_from_pil(pil_image)
-                        st.session_state.last_result = result
-                        st.session_state.last_image = pil_image.copy()
-                        st.session_state.ripple = True
+
+                        # Confidence gate: < 30% = not a recognisable crop leaf
+                        conf_pct = result['confidence'] * 100
+                        if result['confidence'] < 0.30:
+                            st.error(
+                                '\u26a0\ufe0f This does not look like a crop leaf image, '
+                                'or the photo is not clear enough.\n\n'
+                                '\u0c26\u0c2f\u0c1a\u0c47\u0c38\u0c3f \u0c38\u0c4d\u0c2a\u0c37\u0c4d\u0c1f\u0c2e\u0c48\u0c28 '
+                                '\u0c2a\u0c02\u0c1f \u0c06\u0c15\u0c41 \u0c2b\u0c4b\u0c1f\u0c4b \u0c2e\u0c3e\u0c24\u0c4d\u0c30\u0c2e\u0c47 upload \u0c1a\u0c47\u0c2f\u0c02\u0c21\u0c3f.'
+                            )
+                            st.warning(
+                                f'\U0001f4ca Model confidence: {conf_pct:.1f}% '
+                                '(minimum required: 30%) — image may not be a leaf or photo is unclear.'
+                            )
+                            st.info(
+                                '\U0001f4a1 Tips for a better photo:\n'
+                                '- Take a close-up of ONE leaf and fill the frame\n'
+                                '- Use natural daylight, avoid dark or blurry shots\n'
+                                '- Leaf should be flat and clearly visible\n'
+                                '- Accepted: green, yellowing, brown, or spotted leaves\n'
+                                '- Not accepted: people, food, objects, or unclear photos'
+                            )
+                            st.session_state.last_result = None
+                            st.session_state.last_image = None
+                        else:
+                            st.session_state.last_result = result
+                            st.session_state.last_image = pil_image.copy()
+                            st.session_state.ripple = True
 
     # Show analysis if we have a previous result (kept on same page)
     if st.session_state.last_result is not None:
