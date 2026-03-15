@@ -63,6 +63,32 @@ def disease_display_no_plant(text: str) -> str:
     out = " ".join(lower.split()).strip()
     return out.title() if out else "Disease"
 
+
+def infer_stress_stage(stress_text: str, confidence: float) -> str:
+    """Roughly describe early / mid / late stress stage from text + confidence."""
+    s = stress_text.lower()
+    if "no stress" in s or "healthy" in s:
+        return "No stress"
+    if "low" in s or ("moderate" in s and confidence < 0.85):
+        return "Early stress (starting stage)"
+    if "severe" in s and confidence >= 0.9:
+        return "Late / advanced stress"
+    return "Mid-stage stress"
+
+
+def is_probably_leaf(pil_img: Image.Image) -> bool:
+    """Very simple check to reject clearly non-leaf images."""
+    try:
+        arr = np.array(pil_img.resize((224, 224))).astype("float32")
+        if arr.ndim != 3 or arr.shape[2] < 3:
+            return False
+        r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
+        green_mask = (g > r * 1.05) & (g > b * 1.05)
+        green_frac = float(green_mask.mean())
+        return green_frac > 0.08  # need at least some green-ish pixels
+    except Exception:
+        return False
+
 def get_stress_level(disease_name: str, confidence: float):
     disease_lower = disease_name.lower()
     disease_part = disease_lower.split("__")[-1] if "__" in disease_lower else disease_lower
@@ -178,6 +204,12 @@ def log_analysis_to_history(
 st.title("🌿 Crop Leaf Stress & Disease Detection")
 
 # Farmer-friendly sidebar – steps always visible
+st.sidebar.header("🌾 AI Crop Doctor")
+st.sidebar.markdown("**Farmer simply:**")
+st.sidebar.markdown("- 📷 Photo తీస్తాడు (leaf photo)")
+st.sidebar.markdown("- 🤖 System problem detect చేస్తుంది")
+st.sidebar.markdown("- 🔊 Voice / text లో solution చూపిస్తుంది (future feature)")
+st.sidebar.markdown("---")
 st.sidebar.header("📖 How to Use (ఉపయోగించడం ఎలా)")
 with st.sidebar.expander("📋 Steps (చివరి వరకు చదవండి)", expanded=True):
     st.markdown("**1.** Upload – Click 'Browse files' or drag leaf photo (JPG/PNG)")
@@ -424,10 +456,15 @@ with main_col:
 
             if st.button("🔍 Analyze leaf (విశ్లేషించండి)", type="primary"):
                 with st.spinner("Analyzing leaf image..."):
-                    result = predict_leaf_disease_from_pil(pil_image)
-                    st.session_state.last_result = result
-                    st.session_state.last_image = pil_image.copy()
-                    st.session_state.ripple = True
+                    if not is_probably_leaf(pil_image):
+                        st.error("This photo does not look like a leaf. దయచేసి ఒక్క ఆకు ఉన్న ఫోటో మాత్రమే upload చేయండి.")
+                        st.session_state.last_result = None
+                        st.session_state.last_image = None
+                    else:
+                        result = predict_leaf_disease_from_pil(pil_image)
+                        st.session_state.last_result = result
+                        st.session_state.last_image = pil_image.copy()
+                        st.session_state.ripple = True
 
     # Show analysis if we have a previous result (kept on same page)
     if st.session_state.last_result is not None:
@@ -455,6 +492,7 @@ with main_col:
         col_a, col_b = st.columns(2)
         with col_a:
             st.markdown(f"**Stress type:** {result['stress_level']}")
+            st.markdown(f"**Stress stage:** {infer_stress_stage(result['stress_level'], result['confidence'])}")
         with col_b:
             st.markdown(f"**Model confidence:** {result['confidence'] * 100:.1f}%")
             st.progress(min(max(result["confidence"], 0.0), 1.0))
